@@ -1,0 +1,19 @@
+{
+ "provider": "qwen",
+ "models": [
+  "qwen"
+ ],
+ "agent_dir": "agent",
+ "entry": "main.py",
+ "tasks": [],
+ "step_max_tokens": 8192,
+ "llm_timeout_s": 600,
+ "llm_max_retries": 3,
+ "task_time_limit_s": 1200,
+ "ctx": 131072,
+ "parallel": 50,
+ "note": "A+B + проверка E (названные объекты не процитированы)",
+ "label": "qwen_e_PROD",
+ "bench": "bitgn/ecom1-prod",
+ "model_budget_min": 90
+}

@@ -1,0 +1,26 @@
+[project]
+name = "bitgn-ecom-py"
+version = "0.1.0"
+description = "Runnable Python sample for the BitGN ECOM benchmark"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "annotated-types>=0.7.0",
+    "bitgn-api-connectrpc-python==0.10.1.1.20260609131003+ed9edb653ac2",
+    "bitgn-api-protocolbuffers-python==35.0.0.1.20260609131003+ed9edb653ac2",
+    "openai>=2.26.0",
+    "protobuf>=7.35.0",
+    "pydantic>=2.12.5",
+]
+
+[[tool.uv.index]]
+url = "https://buf.build/gen/python"
+
+[tool.uv]
+# AICODE-NOTE: `harness_core/scripts/sdk-python.sh` rewrites the Buf SDK pins
+# in this file after `buf push`; keep this project flat so the sample stays
+# runnable without packaging ceremony.
+# AICODE-NOTE: ECOM depends on the public runtime modules generated under
+# `bitgn.vm.ecom.*`; rerun `make sdk-python` from `harness_core` after pushing
+# schema changes that touch `proto_api/bitgn/vm/ecom/ecom.proto`.
+package = false
