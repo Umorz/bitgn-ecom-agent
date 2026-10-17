@@ -76,15 +76,36 @@ def model_dir(d):
     return os.path.dirname(sorted(glob.glob(os.path.join(d, "*", "results.json")))[0])
 
 
+NO_ANSWER = "no answer provided"
+
+
+def is_broken(trials) -> bool:
+    """Прогон сломан со стороны инфраструктуры: больше половины задач без ответа.
+
+    Признак done для этого не годится: 12.10 BitGN два часа не запускал задачи, и все 55
+    числились выполненными - с баллом 0 и пометкой 'no answer provided'."""
+    return sum(NO_ANSWER in str(t.get("detail")) for t in trials) > len(trials) / 2
+
+
+def latest_run(label):
+    """Папка последнего несломанного прогона с этой меткой."""
+    for d in sorted(glob.glob(os.path.join(RUNS, f"*_{label}")), reverse=True):
+        if not glob.glob(os.path.join(d, "*", "results.json")):
+            continue   # прогон не дошёл до результатов (например, модель не ответила на замер)
+        trials = json.load(open(os.path.join(model_dir(d), "results.json"), encoding="utf-8"))["trials"]
+        if not is_broken(trials):
+            return d
+    raise SystemExit(f"нет несломанных прогонов с меткой {label}")
+
+
 def scores(label):
-    d = sorted(glob.glob(os.path.join(RUNS, f"*_{label}")))[-1]
-    r = json.load(open(os.path.join(model_dir(d), "results.json"), encoding="utf-8"))
+    r = json.load(open(os.path.join(model_dir(latest_run(label)), "results.json"), encoding="utf-8"))
     return {t["task"]: t["score"] for t in r["trials"]}
 
 
 def tool_use(label):
     """Задачи, где модель вызывала инструменты предметной области (domain_tool в STEP_LOG)."""
-    d = sorted(glob.glob(os.path.join(RUNS, f"*_{label}")))[-1]
+    d = latest_run(label)
     used = {}
     for line in open(os.path.join(model_dir(d), "steps.jsonl"), encoding="utf-8"):
         r = json.loads(line)
@@ -110,6 +131,20 @@ def compare(variants):
               f"   {len(ud)}/{len(sd)} / {len(up)}/{len(sp)}")
 
 
+def paired_stats(diffs, rnd, n_boot=20000):
+    """Среднее разностей по задачам, 95% бутстреп-интервал и p перестановочного теста.
+
+    Бутстреп: задачи выбираются с возвращением. Перестановочный тест: при нулевой гипотезе
+    знак разности у каждой задачи случаен, p - доля перестановок со средним не меньше
+    наблюдаемого по модулю."""
+    m = sum(diffs) / len(diffs)
+    boots = sorted(sum(rnd.choice(diffs) for _ in diffs) / len(diffs) for _ in range(n_boot))
+    lo, hi = boots[int(0.025 * n_boot)], boots[int(0.975 * n_boot)]
+    extreme = sum(1 for _ in range(n_boot)
+                  if abs(sum(x if rnd.random() < 0.5 else -x for x in diffs)) / len(diffs) >= abs(m))
+    return m, lo, hi, extreme / n_boot
+
+
 def paired(a_labels, b_labels, n_boot=20000, seed=1):
     """Парное сравнение двух вариантов на prod по задачам, с повторами.
 
@@ -125,12 +160,9 @@ def paired(a_labels, b_labels, n_boot=20000, seed=1):
     print(f"A: {', '.join(a_labels)}\nB: {', '.join(b_labels)}")
     for name, ts in (("prod", tasks_all), ("анализ", split["analysis"]), ("отложенная", split["holdout"])):
         d = [diff[t] for t in ts]
-        m = sum(d) / len(d)
-        boots = sorted(sum(rnd.choice(d) for _ in d) / len(d) for _ in range(n_boot))
-        lo, hi = boots[int(0.025 * n_boot)], boots[int(0.975 * n_boot)]
-        extreme = sum(1 for _ in range(n_boot) if abs(sum(x if rnd.random() < 0.5 else -x for x in d)) / len(d) >= abs(m))
+        m, lo, hi, p = paired_stats(d, rnd, n_boot)
         meanA = sum(sum(s.get(t, 0) for s in A) / len(A) for t in ts) / len(ts)
-        print(f"  {name:10s} A {meanA:.3f}  B {meanA + m:.3f}  B-A {m:+.3f}  95% [{lo:+.3f}, {hi:+.3f}]  p={extreme / n_boot:.3f}"
+        print(f"  {name:10s} A {meanA:.3f}  B {meanA + m:.3f}  B-A {m:+.3f}  95% [{lo:+.3f}, {hi:+.3f}]  p={p:.3f}"
               f"  (задач лучше/хуже: {sum(x > 0 for x in d)}/{sum(x < 0 for x in d)})")
 
 
@@ -143,7 +175,7 @@ def usage(kind, labels, tool="query", only=None):
     keep = set(json.load(open(os.path.join(HERE, "prod_split.json"), encoding="utf-8"))[only]) if only else None
     stat = {}
     for lab in labels:
-        d = sorted(glob.glob(os.path.join(RUNS, f"*_{lab}")))[-1]
+        d = latest_run(lab)
         sc = scores(lab)
         calls, errs = {}, {}
         for line in open(os.path.join(model_dir(d), "steps.jsonl"), encoding="utf-8"):

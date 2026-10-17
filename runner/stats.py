@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Статистика прогонов BitGN: разброс, доверительные интервалы, парные тесты.
 
-   python stats.py A=<маска> [B=<маска>]
-   Маска - шаблон папок серий в папке прогонов (BITGN_RUNS), например "*rep?_gemma_edits1-28".
+   python stats.py A=<маска> [B=<маска>] [SET=analysis|holdout]
+   Маска - шаблон папок серий в папке прогонов (BITGN_RUNS), например "*_qwen_e*_PROD".
+   SET - считать только по половине prod из prod_split.json.
 
    Для группы: балл каждого прогона, среднее ± ст.откл., 95% ДИ бутстрепом по
    задачам, доля успеха по задачам, нестабильные задачи (решаются через раз).
@@ -22,19 +23,31 @@ for s in (sys.stdout,):
     except Exception: pass
 
 
-SUBSET = None   # SET=train|val - считать только по части задач из split.json
+from task_types import is_broken
+
+SUBSET = None   # SET=analysis|holdout - считать только по половине prod из prod_split.json
 
 
 def load_group(pattern):
+    """Прогоны по маске: (имя папки, {задача: балл}). Сломанные прогоны пропускаются.
+
+    Берутся все задачи, а не только done: невыполненная задача - это балл 0, как у BitGN."""
     runs = []
     for d in sorted(glob.glob(os.path.join(RUNS, pattern))):
         for rp in glob.glob(os.path.join(d, "**", "results.json"), recursive=True):
-            r = json.load(open(rp, encoding="utf-8"))
-            tasks = {t["task"]: t["score"] for t in r["trials"] if t["done"]
-                     and (SUBSET is None or t["task"] in SUBSET)}
+            trials = json.load(open(rp, encoding="utf-8"))["trials"]
+            if is_broken(trials):
+                print(f"   пропущен сломанный прогон {os.path.basename(d)}")
+                continue
+            tasks = {t["task"]: t["score"] for t in trials if SUBSET is None or t["task"] in SUBSET}
             if tasks:
                 runs.append((os.path.basename(d), tasks))
     return runs
+
+
+def run_score(tasks):
+    """Балл прогона как у BitGN: средний балл по задачам (dev - 55, prod - 100)."""
+    return sum(tasks.values()) / len(tasks)
 
 
 def pass_rates(runs):
@@ -51,8 +64,7 @@ def bootstrap_ci(values, n=10000, seed=1):
 
 
 def describe(name, runs):
-    # балл BitGN = сумма / 55; на части задач - доля успеха по этой части
-    scores = [sum(r.values()) / (55 if SUBSET is None else len(SUBSET)) for _, r in runs]
+    scores = [run_score(r) for _, r in runs]
     print(f"\n== {name}: {len(runs)} прогон(ов)")
     for (label, r), s in zip(runs, scores):
         print(f"   {label:55s} балл {s:.3f}  решено {sum(v >= 1 for v in r.values())}/{len(r)}")
@@ -108,7 +120,7 @@ if __name__ == "__main__":
     groups = dict(a.split("=", 1) for a in sys.argv[1:])
     if "SET" in groups:
         part = groups.pop("SET")
-        SUBSET = set(json.load(open(os.path.join(os.path.dirname(__file__), "split.json"), encoding="utf-8"))[part])
+        SUBSET = set(json.load(open(os.path.join(os.path.dirname(__file__), "prod_split.json"), encoding="utf-8"))[part])
         print(f"считаю только по части {part}: {len(SUBSET)} задач")
     loaded = {k: load_group(v) for k, v in groups.items()}
     for k, runs in loaded.items():
