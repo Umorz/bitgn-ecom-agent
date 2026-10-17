@@ -16,8 +16,10 @@ import ctypes, datetime, json, os, re, statistics, subprocess, sys, time, urllib
 # корень проекта - папка над runner/; остальные пути относительно него
 ROOT      = os.environ.get("BITGN_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_DIR = os.path.join(ROOT, "agent")
-# Python агента: окружение uv в agent/.venv; BITGN_AGENT_PY - чтобы взять другое
-AGENT_PY  = os.environ.get("BITGN_AGENT_PY") or os.path.join(AGENT_DIR, ".venv", "Scripts", "python.exe")
+# Python агента: окружение uv в agent/.venv; BITGN_AGENT_PY - чтобы взять другое.
+# Внутри окружения путь зависит от системы: Scripts\python.exe на Windows, bin/python на Linux и macOS
+AGENT_PY  = os.environ.get("BITGN_AGENT_PY") or os.path.join(
+    AGENT_DIR, ".venv", *(("Scripts", "python.exe") if os.name == "nt" else ("bin", "python")))
 ENVFILE   = os.path.join(ROOT, ".env")
 RUNS_DIR  = os.environ.get("BITGN_RUNS") or os.path.join(ROOT, "runs")
 RESTART   = f'"{sys.executable}" "{os.path.join(ROOT, "runner", "restart_llm.py")}"'
@@ -25,6 +27,13 @@ OLLAMA    = "http://127.0.0.1:11434"
 PROXY     = "http://127.0.0.1:11435"
 
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+
+
+def keep_awake(on: bool) -> None:
+    """Не давать Windows уснуть во время серии. На других системах ничего не делает:
+    там за сном следят сами (например, systemd-inhibit или caffeinate снаружи)."""
+    if sys.platform == "win32":
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0))
 
 for s in (sys.stdout, sys.stderr):
     try: s.reconfigure(encoding="utf-8", line_buffering=True)
@@ -495,7 +504,7 @@ def main():
     LOG = os.path.join(series_dir, "dispatcher.log")
     json.dump(plan, open(os.path.join(series_dir, "plan.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
-    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    keep_awake(True)
     say(f"серия {plan['label']}: {len(plan['models'])} моделей, оболочка {plan['git']}, папка {series_dir}")
     if plan["git"].endswith("DIRTY"):
         say("ВНИМАНИЕ: в оболочке есть незакоммиченные изменения — версия не воспроизводима")
@@ -519,7 +528,7 @@ def main():
                 if g and g["temp"] <= 65: break
                 time.sleep(20)
     finally:
-        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+        keep_awake(False)
         say("серия завершена")
 
 
